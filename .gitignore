@@ -20,7 +20,6 @@ desktop.ini
 # Runtime artefacts — NE PAS committer
 logs/
 embeddings/
-models/
 
 # Secrets / config locale
 *.local.yaml
