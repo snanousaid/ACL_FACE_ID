@@ -26,6 +26,14 @@ access:
   unlock_seconds: 3
   cooldown_seconds: 5        # anti-spam: même user ne déclenche pas deux fois en <5s
 
+gpio:
+  # Désactivé pour l'instant — passer à true quand la gâche sera câblée (A133).
+  # Sur Windows: ignoré (stub silencieux). Sur Linux: libgpiod si enabled.
+  enabled: false
+  chip: "/dev/gpiochip1"     # A133: vérifier avec `gpiodetect`
+  line: 7                    # offset de la ligne sur le chip
+  active_high: true          # relais NO actif haut (adapter selon câblage)
+
 brightness:
   min_mean: 40               # trop sombre en dessous
   max_mean: 220              # surex. au dessus

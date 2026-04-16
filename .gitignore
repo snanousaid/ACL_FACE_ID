@@ -21,6 +21,9 @@ desktop.ini
 logs/
 embeddings/
 
+# Claude Code local memory (hors projet)
+memory/
+
 # Secrets / config locale
 *.local.yaml
 .env

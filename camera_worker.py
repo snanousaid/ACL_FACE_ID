@@ -6,6 +6,7 @@ Enrôlement iPhone-like: exige N échantillons pour chacune des 5 poses
 from __future__ import annotations
 
 import logging
+import platform
 import threading
 import time
 from datetime import datetime
@@ -16,6 +17,7 @@ from typing import Optional
 import cv2
 import numpy as np
 
+from gpio import AccessActuator
 from utils import (
     FaceProcessor,
     brightness_ok,
@@ -105,6 +107,14 @@ class CameraWorker:
         self.cooldown = float(cfg["access"]["cooldown_seconds"])
         self.unlock_s = int(cfg["access"]["unlock_seconds"])
 
+        gpio_cfg = cfg.get("gpio", {})
+        self.actuator = AccessActuator(
+            chip=gpio_cfg.get("chip", "/dev/gpiochip1"),
+            line=int(gpio_cfg.get("line", 7)),
+            active_high=bool(gpio_cfg.get("active_high", True)),
+            enabled=bool(gpio_cfg.get("enabled", True)),
+        )
+
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._jpeg: Optional[bytes] = None
@@ -124,7 +134,10 @@ class CameraWorker:
         self._enroll_current_pose: str = "transition"
         self._enroll_last_msg: str = ""
 
-        self.logger.info("STARTUP,camera_worker")
+        self.logger.info(
+            f"STARTUP,camera_worker,os={platform.system()},arch={platform.machine()},"
+            f"py={platform.python_version()},{self.actuator.describe()}"
+        )
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
 
@@ -213,6 +226,7 @@ class CameraWorker:
                         if now - self._last_grant.get(name, 0.0) >= self.cooldown:
                             self.logger.info(f"GRANTED,{name},role={role},score={score:.3f}")
                             self._last_grant[name] = now
+                            self.actuator.pulse(self.unlock_s)
                         label = f"{name} [{role}] {score:.2f}"
                         color = (0, 220, 0)
                     else:
@@ -375,3 +389,7 @@ class CameraWorker:
     def stop(self) -> None:
         self._stop.set()
         self._thread.join(timeout=2.0)
+        try:
+            self.actuator.close()
+        except Exception:
+            pass
