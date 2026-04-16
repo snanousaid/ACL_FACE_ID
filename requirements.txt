@@ -1,0 +1,12 @@
+opencv-python>=4.9,<5
+numpy>=2.1
+PyYAML>=6.0
+Flask>=3.0
+
+# Optional alternative embedding backend (dlib) — uncomment to test
+# On Windows requires CMake + MSVC Build Tools
+# face-recognition==1.3.0
+# dlib==19.24.2
+
+# Deployment-only (Allwinner A133 / Linux) — do NOT install on Windows
+# gpiod==2.2.0

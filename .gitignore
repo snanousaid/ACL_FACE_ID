@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Runtime artefacts — NE PAS committer
+logs/
+embeddings/
+models/
+
+# Secrets / config locale
+*.local.yaml
+.env

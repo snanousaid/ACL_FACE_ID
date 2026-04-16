@@ -1,0 +1,39 @@
+# Model files (download once):
+#   YuNet : https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx
+#   SFace : https://github.com/opencv/opencv_zoo/raw/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx
+# Place them in ./models/
+
+camera:
+  index: 0
+  width: 640
+  height: 480
+  fps: 15
+  # Windows: auto DSHOW. Linux (A133): auto V4L2. Override possible: "V4L2" | "DSHOW" | "MSMF" | "ANY"
+  backend: "AUTO"
+
+detection:
+  model: "models/face_detection_yunet_2023mar.onnx"
+  score_threshold: 0.7
+  nms_threshold: 0.3
+  top_k: 50
+
+recognition:
+  backend: "sface"           # "sface" (default, cross-platform) | "dlib" (needs face_recognition)
+  model: "models/face_recognition_sface_2021dec.onnx"
+  match_threshold: 0.80      # cosine similarity in [0,1]
+
+access:
+  unlock_seconds: 3
+  cooldown_seconds: 5        # anti-spam: même user ne déclenche pas deux fois en <5s
+
+brightness:
+  min_mean: 40               # trop sombre en dessous
+  max_mean: 220              # surex. au dessus
+  warn_every_n_frames: 30
+
+paths:
+  embeddings: "embeddings/known_faces.pkl"
+  log_file: "logs/access.log"
+
+display:
+  show_preview: true         # False en prod embarquée (headless)
