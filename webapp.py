@@ -63,6 +63,9 @@ def index():
 
 
 # --------------- stream vidéo MJPEG ---------------
+_STREAM_INTERVAL = 1.0 / max(1, int(CFG.get("perf", {}).get("stream_fps", 10)))
+
+
 def _mjpeg_generator():
     boundary = b"--frame"
     while True:
@@ -72,7 +75,7 @@ def _mjpeg_generator():
             continue
         yield (boundary + b"\r\nContent-Type: image/jpeg\r\nContent-Length: "
                + str(len(jpg)).encode() + b"\r\n\r\n" + jpg + b"\r\n")
-        time.sleep(1 / 20)  # ~20 FPS côté client
+        time.sleep(_STREAM_INTERVAL)
 
 
 @app.route("/video_feed")

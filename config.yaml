@@ -5,11 +5,17 @@
 
 camera:
   index: 0
-  width: 640
-  height: 480
+  width: 480                 # baissé pour A733 (était 640) — coût détection ~-40%
+  height: 360                # était 480
   fps: 15
   # Windows: auto DSHOW. Linux (A133): auto V4L2. Override possible: "V4L2" | "DSHOW" | "MSMF" | "ANY"
   backend: "AUTO"
+
+perf:
+  opencv_threads: 2          # cv2.setNumThreads — 0 = tous les cores. 2 = sweet spot A733
+  detect_every_n: 2          # détection 1 frame sur N (1 = chaque frame, 2 = 50%, 3 = 33%)
+  stream_fps: 10             # FPS du stream MJPEG envoyé au navigateur (était 20)
+  jpeg_quality: 60           # 60-70 = bon compromis qualité/CPU
 
 detection:
   model: "models/face_detection_yunet_2023mar.onnx"

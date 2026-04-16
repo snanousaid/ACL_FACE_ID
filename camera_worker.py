@@ -98,6 +98,14 @@ def _estimate_pose(face_row: np.ndarray) -> tuple[str, float, float]:
 class CameraWorker:
     def __init__(self, cfg: dict):
         self.cfg = cfg
+
+        perf = cfg.get("perf", {})
+        self.detect_every = max(1, int(perf.get("detect_every_n", 1)))
+        self.jpeg_quality = int(perf.get("jpeg_quality", 70))
+        n_threads = int(perf.get("opencv_threads", 0))
+        if n_threads > 0:
+            cv2.setNumThreads(n_threads)
+
         self.fp = FaceProcessor(cfg)
         self.cap = open_camera(cfg)
         self.db = load_known(cfg["paths"]["embeddings"])
@@ -133,6 +141,12 @@ class CameraWorker:
         self._enroll_last_ts: float = 0.0
         self._enroll_current_pose: str = "transition"
         self._enroll_last_msg: str = ""
+
+        # --- cache overlay pour frames sautées (skip-frame) ---
+        self._frame_idx: int = 0
+        self._last_box: Optional[tuple[int, int, int, int]] = None
+        self._last_label: str = ""
+        self._last_color: tuple[int, int, int] = (200, 200, 200)
 
         self.logger.info(
             f"STARTUP,camera_worker,os={platform.system()},arch={platform.machine()},"
@@ -184,67 +198,87 @@ class CameraWorker:
 
     # ---------- boucle principale ----------
     def _loop(self) -> None:
-        jpeg_params = [int(cv2.IMWRITE_JPEG_QUALITY), 70]
         while not self._stop.is_set():
+            jpeg_params = [int(cv2.IMWRITE_JPEG_QUALITY), self.jpeg_quality]
             ok, frame = self.cap.read()
             if not ok:
                 time.sleep(0.05)
                 continue
 
+            self._frame_idx += 1
+            do_detect = (self._frame_idx % self.detect_every == 0)
+
             bright = mean_brightness(frame)
             lum_ok, lum_msg = brightness_ok(bright, self.cfg)
-            state = {
-                "brightness": float(bright), "face": False,
-                "name": None, "role": None, "score": 0.0,
-                "access": "waiting", "msg": lum_msg,
-                "ts": time.time(),
-            }
-            color = (200, 200, 200)
-            label = lum_msg
 
-            if lum_ok:
-                faces = self.fp.detect(frame)
-                if faces is not None and len(faces) >= 1:
-                    face = FaceProcessor.best_face(faces)
-                    feat = self.fp.embed(frame, face)
-                    state["face"] = True
+            if do_detect:
+                state = {
+                    "brightness": float(bright), "face": False,
+                    "name": None, "role": None, "score": 0.0,
+                    "access": "waiting", "msg": lum_msg,
+                    "ts": time.time(),
+                }
+                color = (200, 200, 200)
+                label = lum_msg
+                box: Optional[tuple[int, int, int, int]] = None
 
-                    # enrôlement (accepte uniquement si pose+qualité OK)
-                    with self._lock:
-                        self._try_sample(face, feat)
+                if lum_ok:
+                    faces = self.fp.detect(frame)
+                    if faces is not None and len(faces) >= 1:
+                        face = FaceProcessor.best_face(faces)
+                        feat = self.fp.embed(frame, face)
+                        state["face"] = True
 
-                    # matching
-                    name, score, entry = match(feat, self.db)
-                    state["score"] = float(score)
+                        with self._lock:
+                            self._try_sample(face, feat)
 
-                    if name is not None and score >= self.threshold:
-                        role = entry.get("role", "user") if entry else "user"
-                        state["name"] = name
-                        state["role"] = role
-                        state["access"] = "granted"
-                        now = time.time()
-                        if now - self._last_grant.get(name, 0.0) >= self.cooldown:
-                            self.logger.info(f"GRANTED,{name},role={role},score={score:.3f}")
-                            self._last_grant[name] = now
-                            self.actuator.pulse(self.unlock_s)
-                        label = f"{name} [{role}] {score:.2f}"
-                        color = (0, 220, 0)
+                        name, score, entry = match(feat, self.db)
+                        state["score"] = float(score)
+
+                        if name is not None and score >= self.threshold:
+                            role = entry.get("role", "user") if entry else "user"
+                            state["name"] = name
+                            state["role"] = role
+                            state["access"] = "granted"
+                            now = time.time()
+                            if now - self._last_grant.get(name, 0.0) >= self.cooldown:
+                                self.logger.info(f"GRANTED,{name},role={role},score={score:.3f}")
+                                self._last_grant[name] = now
+                                self.actuator.pulse(self.unlock_s)
+                            label = f"{name} [{role}] {score:.2f}"
+                            color = (0, 220, 0)
+                        else:
+                            state["access"] = "denied"
+                            state["name"] = name or "unknown"
+                            self.logger.info(f"DENIED,{name or 'unknown'},score={score:.3f}")
+                            label = f"DENIED {score:.2f}"
+                            color = (0, 0, 220)
+
+                        x, y, w, h = face[:4].astype(int)
+                        box = (x, y, w, h)
                     else:
-                        state["access"] = "denied"
-                        state["name"] = name or "unknown"
-                        self.logger.info(f"DENIED,{name or 'unknown'},score={score:.3f}")
-                        label = f"DENIED {score:.2f}"
-                        color = (0, 0, 220)
-
-                    x, y, w, h = face[:4].astype(int)
-                    cv2.rectangle(frame, (x, y), (x + w, y + h), color, 2)
+                        state["msg"] = "no_face"
+                        label = "no face"
                 else:
-                    state["msg"] = "no_face"
-                    label = "no face"
-            else:
-                color = (0, 0, 220)
-                self.logger.warning(f"brightness,{lum_msg}")
+                    color = (0, 0, 220)
+                    self.logger.warning(f"brightness,{lum_msg}")
 
+                # mise à jour état + cache pour frames sautées suivantes
+                with self._lock:
+                    self._status = state
+                self._last_box = box
+                self._last_label = label
+                self._last_color = color
+            else:
+                # frame sautée — réutilise l'état et la bbox précédents
+                state = self._status
+                color = self._last_color
+                label = self._last_label
+                box = self._last_box
+
+            if box is not None:
+                x, y, w, h = box
+                cv2.rectangle(frame, (x, y), (x + w, y + h), color, 2)
             cv2.putText(frame, label, (10, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
             cv2.putText(frame, f"lum:{bright:.0f}", (10, frame.shape[0] - 10),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
@@ -270,7 +304,6 @@ class CameraWorker:
             with self._lock:
                 if ok_jpg:
                     self._jpeg = buf.tobytes()
-                self._status = state
 
         try:
             self.cap.release()
