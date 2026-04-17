@@ -3,6 +3,8 @@ numpy<2.0; python_version < "3.10"
 numpy>=2.1; python_version >= "3.10"
 PyYAML>=6.0
 Flask>=3.0
+flask-cors>=4.0
+python-socketio>=5.11,<6
 
 # GPIO — installé uniquement sur Linux (A133). Ignoré sur Windows grâce au marker.
 # v2.x nécessite libgpiod 2.x sur le système. Si indisponible, installe plutôt

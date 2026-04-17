@@ -17,6 +17,7 @@ from typing import Optional
 import cv2
 import numpy as np
 
+import face_events
 from gpio import AccessActuator
 from utils import (
     FaceProcessor,
@@ -138,6 +139,10 @@ class CameraWorker:
             "ts": 0.0, "msg": "démarrage…",
         }
         self._last_grant: dict[str, float] = {}
+
+        # --- throttling des événements socket (granted/denied) ---
+        self._last_event_ts: float = 0.0
+        self._last_event_key: str = ""
 
         # --- état enrôlement multi-poses ---
         self._enroll_active = False
@@ -306,6 +311,10 @@ class CameraWorker:
                 self._last_box = box
                 self._last_label = label
                 self._last_color = color
+
+                # émission événement socket (throttlé par cooldown)
+                if state["access"] in ("granted", "denied") and not self._enroll_active:
+                    self._maybe_emit_event(state)
             else:
                 # frame sautée — réutilise l'état et la bbox précédents
                 state = self._status
@@ -346,6 +355,32 @@ class CameraWorker:
             self.cap.release()
         except Exception:
             pass
+
+    # ---------- émission événements WebSocket ----------
+    def _maybe_emit_event(self, state: dict) -> None:
+        """Pousse un AccessEvent sur le bus face_events, throttlé par cooldown."""
+        access = state.get("access")
+        name = state.get("name")
+        key = f"{access}:{name or ''}"
+        now = time.time()
+        if key == self._last_event_key and (now - self._last_event_ts) < self.cooldown:
+            return
+        self._last_event_key = key
+        self._last_event_ts = now
+
+        granted = access == "granted"
+        display_name = name if (name and name != "unknown") else None
+        payload = {
+            "eventType": "ACCESS_GRANTED" if granted else "ACCESS_DENIED",
+            "status": granted,
+            "source": "face",
+            "score": float(state.get("score", 0.0)),
+            "user": {"first_name": display_name} if display_name else None,
+            "doorName": "Face ID",
+            "readerName": "Caméra locale",
+            "createdAt": datetime.now().isoformat(),
+        }
+        face_events.emit(payload)
 
     # ---------- API thread-safe ----------
     def get_jpeg(self) -> Optional[bytes]:

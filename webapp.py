@@ -1,22 +1,30 @@
 """Interface web d'administration multi-utilisateurs avec stream vidéo live.
 
-Lancer: python webapp.py  →  http://localhost:5000
+Lancer: python webapp.py
+  → HTTP (dashboard/stream/API) : http://localhost:5000
+  → Socket.IO (événements face) : ws://localhost:5001
 
 ATTENTION: la webapp possède maintenant la caméra via CameraWorker.
 Ne pas lancer main.py en parallèle (conflit caméra).
 """
 from __future__ import annotations
 
+import logging
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
 
 import cv2
 import numpy as np
+import socketio
 from flask import (
     Flask, Response, flash, jsonify, redirect, render_template, request, url_for,
 )
+from flask_cors import CORS
+from werkzeug.serving import make_server
 
+import face_events
 from camera_worker import CameraWorker
 from utils import (
     FaceProcessor,
@@ -28,9 +36,37 @@ from utils import (
 
 CFG = load_config("config.yaml")
 ensure_dirs(CFG)
+
+# --------------- Socket.IO (port 5001) ----------------------
+sio = socketio.Server(cors_allowed_origins="*", async_mode="threading")
+sio_app = socketio.WSGIApp(sio)
+_sio_log = logging.getLogger("face-socket")
+
+
+@sio.event
+def connect(sid, environ):  # noqa: D401
+    _sio_log.info("client connecté: %s", sid)
+
+
+@sio.event
+def disconnect(sid):
+    _sio_log.info("client déconnecté: %s", sid)
+
+
+def _emit_face_event(payload: dict) -> None:
+    """Callback branché dans face_events : pousse sur tous les clients."""
+    sio.emit("event", payload)
+
+
+face_events.set_emitter(_emit_face_event)
+
+# --------------- Worker caméra -------------------------------
 WORKER = CameraWorker(CFG)
 
+# --------------- Flask (port 5000) ---------------------------
 app = Flask(__name__)
+# Autorise tous les domaines (ACL_Terminal dev = localhost:5173, prod = Electron file://).
+CORS(app)
 app.secret_key = "change-me-in-production"
 app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024
 
@@ -87,7 +123,56 @@ def video_feed():
 # --------------- statut temps réel ---------------
 @app.route("/status.json")
 def status_json():
-    return jsonify(WORKER.get_status())
+    s = WORKER.get_status()
+    # Champs aplatis pour consommation React (ACL_Terminal)
+    if s.get("enroll_poses"):
+        s["poses_done"] = [p["id"] for p in s["enroll_poses"] if p.get("done")]
+        s["required_poses"] = [p["id"] for p in s["enroll_poses"] if p.get("required")]
+        s["optional_poses"] = [p["id"] for p in s["enroll_poses"] if not p.get("required")]
+        s["current_pose"] = s.get("enroll_current_pose")
+    return jsonify(s)
+
+
+# --------------- API JSON utilisateurs (consommée par ACL_Terminal) ---------------
+def _list_users() -> list[dict]:
+    db = load_known(CFG["paths"]["embeddings"])
+    out = []
+    for name, entry in sorted(db.items()):
+        out.append({
+            "name": name,
+            "role": entry.get("role", "user"),
+            "created_at": entry.get("created_at", ""),
+            "active": entry.get("active", True),
+            "dim": int(np.asarray(entry["embedding"]).shape[0]),
+        })
+    return out
+
+
+@app.route("/api/users", methods=["GET"])
+def api_users():
+    return jsonify(_list_users())
+
+
+@app.route("/api/users/<name>/toggle", methods=["POST"])
+def api_toggle_user(name: str):
+    db = load_known(CFG["paths"]["embeddings"])
+    if name not in db:
+        return jsonify({"ok": False, "msg": "introuvable"}), 404
+    db[name]["active"] = not db[name].get("active", True)
+    save_known(CFG["paths"]["embeddings"], db)
+    WORKER.reload_db()
+    return jsonify({"ok": True, "active": db[name]["active"]})
+
+
+@app.route("/api/users/<name>", methods=["DELETE"])
+def api_delete_user(name: str):
+    db = load_known(CFG["paths"]["embeddings"])
+    if name not in db:
+        return jsonify({"ok": False, "msg": "introuvable"}), 404
+    del db[name]
+    save_known(CFG["paths"]["embeddings"], db)
+    WORKER.reload_db()
+    return jsonify({"ok": True})
 
 
 # --------------- enrôlement par upload (hors caméra) ---------------
@@ -173,7 +258,7 @@ def pose_thumb(pose: str):
                     headers={"Cache-Control": "no-store"})
 
 
-# --------------- gestion utilisateurs ---------------
+# --------------- gestion utilisateurs (formulaires HTML legacy) ---------------
 @app.route("/delete/<name>", methods=["POST"])
 def delete(name: str):
     db = load_known(CFG["paths"]["embeddings"])
@@ -196,7 +281,19 @@ def toggle(name: str):
     return redirect(url_for("index"))
 
 
+# --------------- serveur Socket.IO (thread séparé) ---------------
+def _start_socketio_server(host: str = "0.0.0.0", port: int = 5001) -> threading.Thread:
+    server = make_server(host, port, sio_app, threaded=True)
+    t = threading.Thread(target=server.serve_forever, daemon=True, name="face-socketio")
+    t.start()
+    logging.info("Socket.IO face events → ws://%s:%s", host, port)
+    return t
+
+
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO,
+                        format="%(asctime)s [%(name)s] %(message)s")
+    _start_socketio_server()
     try:
         app.run(host="0.0.0.0", port=5000, debug=False, threaded=True)
     finally:
