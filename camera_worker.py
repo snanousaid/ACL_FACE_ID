@@ -117,6 +117,14 @@ class CameraWorker:
         self.cooldown = float(cfg["access"]["cooldown_seconds"])
         self.unlock_s = int(cfg["access"]["unlock_seconds"])
 
+        # ROI : le visage doit être centré dans le cadre pour déclencher la reco.
+        roi_cfg = cfg.get("roi", {}) or {}
+        self.roi_enabled = bool(roi_cfg.get("enabled", True))
+        self.roi_x = float(roi_cfg.get("x", 0.25))
+        self.roi_y = float(roi_cfg.get("y", 0.15))
+        self.roi_w = float(roi_cfg.get("w", 0.50))
+        self.roi_h = float(roi_cfg.get("h", 0.70))
+
         enroll_cfg = cfg.get("enrollment", {})
         self.required_poses: list[str] = enroll_cfg.get("required_poses", ["center", "left", "right"])
         self.optional_poses: list[str] = enroll_cfg.get("optional_poses", ["up", "down"])
@@ -169,6 +177,20 @@ class CameraWorker:
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
 
+    # ---------- helpers ROI ----------
+    def _face_in_roi(self, face_row: np.ndarray, frame_w: int, frame_h: int) -> bool:
+        """Retourne True si le centre du visage est dans le rectangle ROI."""
+        if not self.roi_enabled:
+            return True
+        x, y, w, h = face_row[:4]
+        cx = float(x + w / 2.0) / frame_w
+        cy = float(y + h / 2.0) / frame_h
+        # cast explicite en bool Python pour la sérialisation JSON (numpy.bool_ non supporté)
+        return bool(
+            self.roi_x <= cx <= (self.roi_x + self.roi_w)
+            and self.roi_y <= cy <= (self.roi_y + self.roi_h)
+        )
+
     # ---------- helpers enrôlement ----------
     def _enroll_next_pose(self) -> Optional[str]:
         for p in self.required_poses:
@@ -184,8 +206,12 @@ class CameraWorker:
                    for p in self.required_poses)
 
     def _try_sample(self, frame: np.ndarray, face_row: np.ndarray, feat: np.ndarray) -> None:
-        """Accepte l'échantillon si : enrôlement actif, qualité OK, pose requise pas pleine."""
+        """Accepte l'échantillon si : enrôlement actif, dans ROI, qualité OK, pose requise pas pleine."""
         if not self._enroll_active:
+            return
+
+        if not self._face_in_roi(face_row, frame.shape[1], frame.shape[0]):
+            self._enroll_last_msg = "visage hors du cadre"
             return
 
         score = float(face_row[-1])
@@ -268,36 +294,46 @@ class CameraWorker:
 
                     if faces is not None and len(faces) >= 1:
                         face = FaceProcessor.best_face(faces)
-                        feat = self.fp.embed(frame, face)
                         state["face"] = True
-
-                        with self._lock:
-                            self._try_sample(frame, face, feat)
-
-                        name, score, entry = match(feat, self.db)
-                        state["score"] = float(score)
-
-                        if name is not None and score >= self.threshold:
-                            role = entry.get("role", "user") if entry else "user"
-                            state["name"] = name
-                            state["role"] = role
-                            state["access"] = "granted"
-                            now = time.time()
-                            if now - self._last_grant.get(name, 0.0) >= self.cooldown:
-                                self.logger.info(f"GRANTED,{name},role={role},score={score:.3f}")
-                                self._last_grant[name] = now
-                                self.actuator.pulse(self.unlock_s)
-                            label = f"{name} [{role}] {score:.2f}"
-                            color = (0, 220, 0)
-                        else:
-                            state["access"] = "denied"
-                            state["name"] = name or "unknown"
-                            self.logger.info(f"DENIED,{name or 'unknown'},score={score:.3f}")
-                            label = f"DENIED {score:.2f}"
-                            color = (0, 0, 220)
+                        in_roi = self._face_in_roi(face, frame.shape[1], frame.shape[0])
+                        state["in_roi"] = in_roi
 
                         x, y, w, h = face[:4].astype(int)
                         box = (x, y, w, h)
+
+                        if not in_roi:
+                            # visage détecté mais hors du cadre → pas de reco, pas d'event
+                            state["access"] = "out_of_zone"
+                            state["msg"] = "approchez-vous du cadre"
+                            label = "APPROCHEZ DU CADRE"
+                            color = (160, 160, 160)
+                        else:
+                            feat = self.fp.embed(frame, face)
+
+                            with self._lock:
+                                self._try_sample(frame, face, feat)
+
+                            name, score, entry = match(feat, self.db)
+                            state["score"] = float(score)
+
+                            if name is not None and score >= self.threshold:
+                                role = entry.get("role", "user") if entry else "user"
+                                state["name"] = name
+                                state["role"] = role
+                                state["access"] = "granted"
+                                now = time.time()
+                                if now - self._last_grant.get(name, 0.0) >= self.cooldown:
+                                    self.logger.info(f"GRANTED,{name},role={role},score={score:.3f}")
+                                    self._last_grant[name] = now
+                                    self.actuator.pulse(self.unlock_s)
+                                label = f"{name} [{role}] {score:.2f}"
+                                color = (0, 220, 0)
+                            else:
+                                state["access"] = "denied"
+                                state["name"] = name or "unknown"
+                                self.logger.info(f"DENIED,{name or 'unknown'},score={score:.3f}")
+                                label = f"DENIED {score:.2f}"
+                                color = (0, 0, 220)
                     else:
                         state["msg"] = "no_face"
                         label = "no face"
@@ -321,6 +357,16 @@ class CameraWorker:
                 color = self._last_color
                 label = self._last_label
                 box = self._last_box
+
+            # Cadre ROI — dessiné avant la bbox du visage pour rester en fond
+            if self.roi_enabled:
+                fh, fw = frame.shape[:2]
+                rx1 = int(self.roi_x * fw)
+                ry1 = int(self.roi_y * fh)
+                rx2 = int((self.roi_x + self.roi_w) * fw)
+                ry2 = int((self.roi_y + self.roi_h) * fh)
+                roi_color = color if state.get("face") and state.get("in_roi") else (180, 180, 180)
+                cv2.rectangle(frame, (rx1, ry1), (rx2, ry2), roi_color, 2)
 
             if box is not None:
                 x, y, w, h = box
@@ -391,6 +437,13 @@ class CameraWorker:
         with self._lock:
             s = dict(self._status)
             s["enrolling"] = self._enroll_active
+            s["roi"] = {
+                "enabled": self.roi_enabled,
+                "x": self.roi_x,
+                "y": self.roi_y,
+                "w": self.roi_w,
+                "h": self.roi_h,
+            }
             if self._enroll_active:
                 s["enroll_poses"] = [
                     {

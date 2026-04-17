@@ -33,6 +33,16 @@ access:
   unlock_seconds: 3
   cooldown_seconds: 5        # anti-spam: même user ne déclenche pas deux fois en <5s
 
+# Région d'intérêt : le visage doit y être centré pour déclencher la reconnaissance
+# et l'enrôlement. Coordonnées en fraction (0..1) de la largeur/hauteur de l'image.
+# Valeurs par défaut : rectangle centré occupant 50% largeur × 70% hauteur.
+roi:
+  enabled: true
+  x: 0.32                    # bord gauche
+  y: 0.20                    # bord haut
+  w: 0.36                    # largeur (36 % de l'image)
+  h: 0.55                    # hauteur (55 % de l'image)
+
 gpio:
   # Désactivé pour l'instant — passer à true quand la gâche sera câblée (A133).
   # Sur Windows: ignoré (stub silencieux). Sur Linux: libgpiod si enabled.
