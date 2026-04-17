@@ -55,7 +55,7 @@ enrollment:
   # poses obligatoires — l'enrôlement échoue si l'une manque
   required_poses: ["center", "left", "right"]
   # poses bonus — collectées si l'utilisateur les fait, mais pas bloquantes
-  optional_poses: ["up", "down"]
+  optional_poses: ["down"]
 
 display:
   show_preview: true         # False en prod embarquée (headless)
