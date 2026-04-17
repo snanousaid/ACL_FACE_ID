@@ -164,6 +164,15 @@ def enroll_live_cancel():
     return jsonify({"ok": True, "msg": "Annulé."})
 
 
+@app.route("/pose_thumb/<pose>.jpg")
+def pose_thumb(pose: str):
+    data = WORKER.get_pose_thumb(pose)
+    if data is None:
+        return ("", 404)
+    return Response(data, mimetype="image/jpeg",
+                    headers={"Cache-Control": "no-store"})
+
+
 # --------------- gestion utilisateurs ---------------
 @app.route("/delete/<name>", methods=["POST"])
 def delete(name: str):

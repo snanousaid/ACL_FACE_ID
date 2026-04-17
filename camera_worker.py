@@ -101,6 +101,7 @@ class CameraWorker:
 
         perf = cfg.get("perf", {})
         self.detect_every = max(1, int(perf.get("detect_every_n", 1)))
+        self.detect_scale = float(perf.get("detect_scale", 1.0))
         self.jpeg_quality = int(perf.get("jpeg_quality", 70))
         n_threads = int(perf.get("opencv_threads", 0))
         if n_threads > 0:
@@ -148,6 +149,9 @@ class CameraWorker:
         self._last_label: str = ""
         self._last_color: tuple[int, int, int] = (200, 200, 200)
 
+        # --- vignettes de l'enrôlement, une JPEG par pose ---
+        self._pose_thumbs: dict[str, bytes] = {}
+
         self.logger.info(
             f"STARTUP,camera_worker,os={platform.system()},arch={platform.machine()},"
             f"py={platform.python_version()},{self.actuator.describe()}"
@@ -166,7 +170,7 @@ class CameraWorker:
         return all(len(self._enroll_bins.get(p, [])) >= self._enroll_target_per_pose
                    for p in POSE_ORDER)
 
-    def _try_sample(self, face_row: np.ndarray, feat: np.ndarray) -> None:
+    def _try_sample(self, frame: np.ndarray, face_row: np.ndarray, feat: np.ndarray) -> None:
         """Accepte l'échantillon si : enrôlement actif, qualité OK, pose requise pas pleine."""
         if not self._enroll_active:
             return
@@ -196,6 +200,17 @@ class CameraWorker:
         self._enroll_last_ts = now
         self._enroll_last_msg = f"+1 {pose} ({len(bucket)}/{self._enroll_target_per_pose})"
 
+        # vignette de la face capturée (crop bbox → 96×96)
+        x, y, w, h = face_row[:4].astype(int)
+        x = max(x, 0); y = max(y, 0)
+        x2 = min(x + w, frame.shape[1]); y2 = min(y + h, frame.shape[0])
+        crop = frame[y:y2, x:x2]
+        if crop.size > 0:
+            thumb = cv2.resize(crop, (96, 96), interpolation=cv2.INTER_AREA)
+            ok_j, buf = cv2.imencode(".jpg", thumb, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+            if ok_j:
+                self._pose_thumbs[pose] = buf.tobytes()
+
     # ---------- boucle principale ----------
     def _loop(self) -> None:
         while not self._stop.is_set():
@@ -223,14 +238,25 @@ class CameraWorker:
                 box: Optional[tuple[int, int, int, int]] = None
 
                 if lum_ok:
-                    faces = self.fp.detect(frame)
+                    # détection sur frame réduite pour gagner du CPU ; coords scalées ensuite
+                    if self.detect_scale < 0.99:
+                        small = cv2.resize(frame, None, fx=self.detect_scale,
+                                           fy=self.detect_scale,
+                                           interpolation=cv2.INTER_AREA)
+                        faces = self.fp.detect(small)
+                        if faces is not None and len(faces) > 0:
+                            faces = faces.copy()
+                            faces[:, :14] *= (1.0 / self.detect_scale)
+                    else:
+                        faces = self.fp.detect(frame)
+
                     if faces is not None and len(faces) >= 1:
                         face = FaceProcessor.best_face(faces)
                         feat = self.fp.embed(frame, face)
                         state["face"] = True
 
                         with self._lock:
-                            self._try_sample(face, feat)
+                            self._try_sample(frame, face, feat)
 
                         name, score, entry = match(feat, self.db)
                         state["score"] = float(score)
@@ -347,6 +373,7 @@ class CameraWorker:
             self._enroll_meta = {"name": name.strip(), "role": (role.strip() or "user")}
             self._enroll_last_ts = 0.0
             self._enroll_last_msg = ""
+            self._pose_thumbs = {}
         return True, (
             f"Enrôlement démarré — {n_per_pose} échantillons × {len(POSE_ORDER)} poses."
         )
@@ -359,6 +386,11 @@ class CameraWorker:
             self._enroll_target_per_pose = 0
             self._enroll_meta = {}
             self._enroll_last_msg = "annulé — aucun utilisateur créé"
+            self._pose_thumbs = {}
+
+    def get_pose_thumb(self, pose: str) -> Optional[bytes]:
+        with self._lock:
+            return self._pose_thumbs.get(pose)
 
     def finalize_enroll(self) -> tuple[bool, str]:
         """Sauvegarde uniquement si TOUTES les poses sont complètes. Comme iPhone."""
@@ -378,6 +410,7 @@ class CameraWorker:
                 self._enroll_target_per_pose = 0
                 self._enroll_meta = {}
                 self._enroll_last_msg = "refusé — poses incomplètes"
+                self._pose_thumbs = {}
                 return False, (
                     "Utilisateur NON enregistré. Poses incomplètes : "
                     + ", ".join(missing)
@@ -411,6 +444,7 @@ class CameraWorker:
             self._enroll_target_per_pose = 0
             self._enroll_meta = {}
             self._enroll_last_msg = ""
+            self._pose_thumbs = {}
             verb = "mis à jour" if existed else "ajouté"
             return True, f"'{name}' {verb} ({len(all_feats)} échantillons, 5 poses)."
 

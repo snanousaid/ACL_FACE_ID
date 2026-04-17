@@ -9,14 +9,14 @@
     header { padding: 14px 22px; background: #1a1d24; border-bottom: 1px solid #2a2f3a; display: flex; justify-content: space-between; align-items: center; }
     header h1 { margin: 0; font-size: 17px; }
     .badge { background: #2a2f3a; padding: 4px 10px; border-radius: 12px; font-size: 12px; }
-    main { padding: 22px; max-width: 1280px; margin: 0 auto; display: grid; gap: 20px; grid-template-columns: 1.2fr 1fr; }
+    main { padding: 22px; max-width: 1400px; margin: 0 auto; display: grid; gap: 20px; grid-template-columns: minmax(520px, 2fr) minmax(380px, 1fr); }
     @media (max-width: 960px) { main { grid-template-columns: 1fr; } }
     section { background: #161923; border: 1px solid #2a2f3a; border-radius: 10px; padding: 16px; }
     h2 { margin-top: 0; font-size: 14px; letter-spacing: 0.3px; color: #9ba3b4; text-transform: uppercase; }
 
     /* Video + status */
-    .video-wrap { position: relative; background: #000; border-radius: 8px; overflow: hidden; }
-    .video-wrap img { display: block; width: 100%; height: auto; }
+    .video-wrap { position: relative; background: #000; border-radius: 8px; overflow: hidden; aspect-ratio: 4 / 3; }
+    .video-wrap img { display: block; width: 100%; height: 100%; object-fit: cover; image-rendering: auto; }
     .status-panel { margin-top: 12px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
     .stat { background: #0f1115; border: 1px solid #242833; border-radius: 8px; padding: 10px; }
     .stat .label { font-size: 11px; color: #6a7080; text-transform: uppercase; letter-spacing: 0.5px; }
@@ -59,10 +59,12 @@
     .progress .bar { background: #2d6cdf; height: 100%; width: 0%; transition: width 0.2s; }
 
     .pose-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; margin-top: 12px; }
-    .pose-card { background: #0f1115; border: 1px solid #2a2f3a; border-radius: 8px; padding: 10px 6px; text-align: center; transition: all 0.2s; }
+    .pose-card { background: #0f1115; border: 1px solid #2a2f3a; border-radius: 8px; padding: 8px 4px; text-align: center; transition: all 0.2s; }
     .pose-card .pose-label { font-size: 11px; color: #9ba3b4; text-transform: uppercase; letter-spacing: 0.5px; }
-    .pose-card .pose-count { font-size: 16px; font-weight: 700; margin-top: 6px; }
+    .pose-card .pose-count { font-size: 14px; font-weight: 700; margin-top: 4px; }
+    .pose-card .pose-thumb { display: none; width: 64px; height: 64px; border-radius: 6px; margin: 6px auto 2px; object-fit: cover; background: #000; }
     .pose-card.done { background: #0f3a1a; border-color: #2e6a3e; color: #8be9a8; }
+    .pose-card.done .pose-thumb { border: 2px solid #2e6a3e; }
     .pose-card.current { border-color: #2d6cdf; box-shadow: 0 0 0 2px rgba(45,108,223,0.35); }
     .pose-hint { margin-top: 10px; padding: 10px; background: #0f1115; border: 1px solid #2a2f3a; border-radius: 6px; font-size: 13px; text-align: center; }
     .flashes { padding: 0 22px; max-width: 1280px; margin: 12px auto 0; }
@@ -128,11 +130,11 @@
         </div>
 
         <div id="pose-grid" class="pose-grid">
-          <div class="pose-card" data-pose="center"><div class="pose-label">Face</div><div class="pose-count">—</div></div>
-          <div class="pose-card" data-pose="left"><div class="pose-label">Gauche</div><div class="pose-count">—</div></div>
-          <div class="pose-card" data-pose="right"><div class="pose-label">Droite</div><div class="pose-count">—</div></div>
-          <div class="pose-card" data-pose="up"><div class="pose-label">Haut</div><div class="pose-count">—</div></div>
-          <div class="pose-card" data-pose="down"><div class="pose-label">Bas</div><div class="pose-count">—</div></div>
+          <div class="pose-card" data-pose="center"><div class="pose-label">Face</div><img class="pose-thumb" alt=""><div class="pose-count">—</div></div>
+          <div class="pose-card" data-pose="left"><div class="pose-label">Gauche</div><img class="pose-thumb" alt=""><div class="pose-count">—</div></div>
+          <div class="pose-card" data-pose="right"><div class="pose-label">Droite</div><img class="pose-thumb" alt=""><div class="pose-count">—</div></div>
+          <div class="pose-card" data-pose="up"><div class="pose-label">Haut</div><img class="pose-thumb" alt=""><div class="pose-count">—</div></div>
+          <div class="pose-card" data-pose="down"><div class="pose-label">Bas</div><img class="pose-thumb" alt=""><div class="pose-count">—</div></div>
         </div>
 
         <div id="pose-hint" class="pose-hint">Prêt à démarrer.</div>
@@ -228,6 +230,14 @@ async function poll() {
         card.querySelector('.pose-count').textContent = `${p.count}/${p.target}`;
         if (p.done) card.classList.add('done');
         if (s.enroll_next === p.id) card.classList.add('current');
+        const thumb = card.querySelector('.pose-thumb');
+        if (p.count > 0) {
+          thumb.src = `/pose_thumb/${p.id}.jpg?c=${p.count}`;
+          thumb.style.display = 'block';
+        } else {
+          thumb.removeAttribute('src');
+          thumb.style.display = 'none';
+        }
       });
       const nextLabel = s.enroll_poses.find(p => p.id === s.enroll_next);
       $('pose-hint').textContent = s.enroll_complete
@@ -278,6 +288,9 @@ function resetEnrollUI(msg) {
   document.querySelectorAll('.pose-card').forEach(c => {
     c.classList.remove('done','current');
     c.querySelector('.pose-count').textContent = '—';
+    const t = c.querySelector('.pose-thumb');
+    t.removeAttribute('src');
+    t.style.display = 'none';
   });
   $('pose-hint').textContent = 'Prêt à démarrer.';
   $('enroll-msg').textContent = msg || '';
