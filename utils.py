@@ -130,8 +130,14 @@ def load_known(path: str) -> dict[str, dict]:
     p = Path(path)
     if not p.exists():
         return {}
-    with open(p, "rb") as f:
-        raw = pickle.load(f)
+    try:
+        with open(p, "rb") as f:
+            raw = pickle.load(f)
+    except (ModuleNotFoundError, Exception) as e:
+        print(f"[WARN] Impossible de charger {p}: {e}")
+        print(f"[WARN] Fichier créé avec une version numpy incompatible. "
+              f"Supprime-le et ré-enrôle: rm {p}")
+        return {}
     return {name: _as_entry(v, name) for name, v in raw.items()}
 
 
