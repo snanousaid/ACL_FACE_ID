@@ -36,17 +36,50 @@ def _pick_backend(name: str) -> int:
 
 def open_camera(cfg: dict) -> cv2.VideoCapture:
     cam_cfg = cfg["camera"]
+    idx = cam_cfg["index"]
     backend = _pick_backend(cam_cfg.get("backend", "AUTO"))
-    cap = cv2.VideoCapture(cam_cfg["index"], backend)
-    if not cap.isOpened():
-        raise RuntimeError(f"Camera {cam_cfg['index']} introuvable (backend={backend})")
 
-    # MJPG allège la bande passante USB sur A133 et accélère la capture
+    # Tentative 1 : index demandé + backend préféré
+    cap = cv2.VideoCapture(idx, backend)
+
+    # Tentative 2 : index demandé, backend auto
+    if not cap.isOpened():
+        print(f"[WARN] Camera {idx} (backend={backend}) échouée — essai backend AUTO")
+        cap = cv2.VideoCapture(idx, cv2.CAP_ANY)
+
+    # Tentative 3 : scanner les index 0-4
+    if not cap.isOpened():
+        for try_idx in range(5):
+            if try_idx == idx:
+                continue
+            print(f"[WARN] Essai /dev/video{try_idx}…")
+            cap = cv2.VideoCapture(try_idx, cv2.CAP_ANY)
+            if cap.isOpened():
+                print(f"[OK] Caméra trouvée sur index {try_idx}")
+                break
+
+    # Tentative 4 : chemin direct V4L2 (Linux)
+    if not cap.isOpened() and platform.system() == "Linux":
+        for dev in ("/dev/video0", "/dev/video1", "/dev/video2", "/dev/video4"):
+            print(f"[WARN] Essai {dev}…")
+            cap = cv2.VideoCapture(dev, cv2.CAP_V4L2)
+            if cap.isOpened():
+                print(f"[OK] Caméra trouvée sur {dev}")
+                break
+
+    if not cap.isOpened():
+        print("[ERR] Aucune caméra trouvée. Vérifier :")
+        print("      - ls /dev/video*")
+        print("      - sudo usermod -aG video $USER  (puis relogger)")
+        print("      - v4l2-ctl --list-devices")
+        print("[WARN] Démarrage SANS caméra — stream indisponible.")
+        return cap  # retourne un cap non-ouvert au lieu de crasher
+
     cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, cam_cfg["width"])
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, cam_cfg["height"])
     cap.set(cv2.CAP_PROP_FPS, cam_cfg["fps"])
-    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # latence min
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
     return cap
 
 

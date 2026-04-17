@@ -223,9 +223,12 @@ class CameraWorker:
     def _loop(self) -> None:
         while not self._stop.is_set():
             jpeg_params = [int(cv2.IMWRITE_JPEG_QUALITY), self.jpeg_quality]
+            if not self.cap.isOpened():
+                time.sleep(1.0)
+                continue
             ok, frame = self.cap.read()
             if not ok:
-                time.sleep(0.05)
+                time.sleep(0.1)
                 continue
 
             self._frame_idx += 1
