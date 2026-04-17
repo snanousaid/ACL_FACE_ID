@@ -66,6 +66,8 @@
     .pose-card.done { background: #0f3a1a; border-color: #2e6a3e; color: #8be9a8; }
     .pose-card.done .pose-thumb { border: 2px solid #2e6a3e; }
     .pose-card.current { border-color: #2d6cdf; box-shadow: 0 0 0 2px rgba(45,108,223,0.35); }
+    .pose-card.optional { border-style: dashed; opacity: 0.7; }
+    .pose-card.optional .pose-label::after { content: " (opt)"; font-size: 9px; color: #6a7080; }
     .pose-hint { margin-top: 10px; padding: 10px; background: #0f1115; border: 1px solid #2a2f3a; border-radius: 6px; font-size: 13px; text-align: center; }
     .flashes { padding: 0 22px; max-width: 1280px; margin: 12px auto 0; }
     .flash { padding: 9px 13px; border-radius: 6px; margin-bottom: 6px; font-size: 14px; }
@@ -225,10 +227,18 @@ async function poll() {
       const cards = document.querySelectorAll('.pose-card');
       cards.forEach(c => c.classList.remove('done','current'));
       s.enroll_poses.forEach(p => {
-        const card = document.querySelector(`.pose-card[data-pose="${p.id}"]`);
-        if (!card) return;
+        let card = document.querySelector(`.pose-card[data-pose="${p.id}"]`);
+        if (!card) {
+          // pose dynamique (créée depuis config) — ajout dynamique
+          const grid = $('pose-grid');
+          card = document.createElement('div');
+          card.className = 'pose-card'; card.dataset.pose = p.id;
+          card.innerHTML = `<div class="pose-label">${p.label}</div><img class="pose-thumb" alt=""><div class="pose-count">—</div>`;
+          grid.appendChild(card);
+        }
         card.querySelector('.pose-count').textContent = `${p.count}/${p.target}`;
         if (p.done) card.classList.add('done');
+        if (!p.required) card.classList.add('optional');
         if (s.enroll_next === p.id) card.classList.add('current');
         const thumb = card.querySelector('.pose-thumb');
         if (p.count > 0) {
@@ -241,7 +251,7 @@ async function poll() {
       });
       const nextLabel = s.enroll_poses.find(p => p.id === s.enroll_next);
       $('pose-hint').textContent = s.enroll_complete
-        ? '✓ Toutes les poses complètes — cliquez sur Valider.'
+        ? '✓ Poses obligatoires complètes — cliquez sur Valider (bonus en cours si détectés).'
         : (nextLabel ? `➜ ${nextLabel.label}  (pose détectée: ${s.enroll_current_pose})` : '…');
       $('enroll-msg').textContent = s.enroll_msg || '';
       $('btn-finalize').disabled = !s.enroll_complete;

@@ -28,8 +28,8 @@ from utils import (
     save_known,
 )
 
-# --- Poses requises (équivalent cercle iPhone Face ID) ---
-POSE_ORDER = ["center", "left", "right", "up", "down"]
+# --- Poses disponibles ---
+ALL_POSES = ["center", "left", "right", "up", "down"]
 POSE_LABELS = {
     "center": "Face caméra",
     "left":   "Tourner à gauche",
@@ -88,9 +88,9 @@ def _estimate_pose(face_row: np.ndarray) -> tuple[str, float, float]:
         return "left", yaw, pitch
     if yaw > 0.30 and abs(pitch) < 0.20:
         return "right", yaw, pitch
-    if pitch < -0.10 and abs(yaw) < 0.25:
+    if pitch < -0.06 and abs(yaw) < 0.30:
         return "up", yaw, pitch
-    if pitch > 0.12 and abs(yaw) < 0.25:
+    if pitch > 0.08 and abs(yaw) < 0.30:
         return "down", yaw, pitch
     return "transition", yaw, pitch
 
@@ -115,6 +115,11 @@ class CameraWorker:
         self.threshold = float(cfg["recognition"]["match_threshold"])
         self.cooldown = float(cfg["access"]["cooldown_seconds"])
         self.unlock_s = int(cfg["access"]["unlock_seconds"])
+
+        enroll_cfg = cfg.get("enrollment", {})
+        self.required_poses: list[str] = enroll_cfg.get("required_poses", ["center", "left", "right"])
+        self.optional_poses: list[str] = enroll_cfg.get("optional_poses", ["up", "down"])
+        self.active_poses: list[str] = self.required_poses + self.optional_poses
 
         gpio_cfg = cfg.get("gpio", {})
         self.actuator = AccessActuator(
@@ -161,14 +166,17 @@ class CameraWorker:
 
     # ---------- helpers enrôlement ----------
     def _enroll_next_pose(self) -> Optional[str]:
-        for p in POSE_ORDER:
+        for p in self.required_poses:
+            if len(self._enroll_bins.get(p, [])) < self._enroll_target_per_pose:
+                return p
+        for p in self.optional_poses:
             if len(self._enroll_bins.get(p, [])) < self._enroll_target_per_pose:
                 return p
         return None
 
-    def _enroll_all_done(self) -> bool:
+    def _enroll_all_required_done(self) -> bool:
         return all(len(self._enroll_bins.get(p, [])) >= self._enroll_target_per_pose
-                   for p in POSE_ORDER)
+                   for p in self.required_poses)
 
     def _try_sample(self, frame: np.ndarray, face_row: np.ndarray, feat: np.ndarray) -> None:
         """Accepte l'échantillon si : enrôlement actif, qualité OK, pose requise pas pleine."""
@@ -187,7 +195,7 @@ class CameraWorker:
 
         pose, _yaw, _pitch = _estimate_pose(face_row)
         self._enroll_current_pose = pose
-        if pose == "transition":
+        if pose == "transition" or pose not in self.active_poses:
             self._enroll_last_msg = "pose intermédiaire"
             return
 
@@ -316,15 +324,15 @@ class CameraWorker:
                     hint = f"ENROLL -> {POSE_LABELS.get(next_p, '—')}" if next_p else "ENROLL OK"
                     cv2.putText(frame, hint, (10, 58), cv2.FONT_HERSHEY_SIMPLEX,
                                 0.7, (0, 200, 255), 2)
-                    # mini tableau de bord
-                    for i, p in enumerate(POSE_ORDER):
+                    for i, p in enumerate(self.active_poses):
                         cnt = len(self._enroll_bins.get(p, []))
                         tgt = self._enroll_target_per_pose
                         done = cnt >= tgt
-                        txt = f"{p[:1].upper()}:{cnt}/{tgt}"
+                        req = "!" if p in self.required_poses else "?"
+                        txt = f"{p[:1].upper()}{req}:{cnt}/{tgt}"
                         col = (0, 220, 0) if done else (0, 200, 255)
-                        cv2.putText(frame, txt, (10 + i * 90, 88),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, col, 2)
+                        cv2.putText(frame, txt, (10 + i * 100, 88),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, col, 2)
 
             ok_jpg, buf = cv2.imencode(".jpg", frame, jpeg_params)
             with self._lock:
@@ -349,16 +357,17 @@ class CameraWorker:
                 s["enroll_poses"] = [
                     {
                         "id": p,
-                        "label": POSE_LABELS[p],
+                        "label": POSE_LABELS.get(p, p),
                         "count": len(self._enroll_bins.get(p, [])),
                         "target": self._enroll_target_per_pose,
                         "done": len(self._enroll_bins.get(p, [])) >= self._enroll_target_per_pose,
+                        "required": p in self.required_poses,
                     }
-                    for p in POSE_ORDER
+                    for p in self.active_poses
                 ]
                 s["enroll_next"] = self._enroll_next_pose()
                 s["enroll_current_pose"] = self._enroll_current_pose
-                s["enroll_complete"] = self._enroll_all_done()
+                s["enroll_complete"] = self._enroll_all_required_done()
                 s["enroll_msg"] = self._enroll_last_msg
                 s["enroll_name"] = self._enroll_meta.get("name", "")
         return s
@@ -368,14 +377,16 @@ class CameraWorker:
             if self._enroll_active:
                 return False, "Un enrôlement est déjà en cours."
             self._enroll_active = True
-            self._enroll_bins = {p: [] for p in POSE_ORDER}
+            self._enroll_bins = {p: [] for p in self.active_poses}
             self._enroll_target_per_pose = max(1, int(n_per_pose))
             self._enroll_meta = {"name": name.strip(), "role": (role.strip() or "user")}
             self._enroll_last_ts = 0.0
             self._enroll_last_msg = ""
             self._pose_thumbs = {}
+        n_req = len(self.required_poses)
+        n_opt = len(self.optional_poses)
         return True, (
-            f"Enrôlement démarré — {n_per_pose} échantillons × {len(POSE_ORDER)} poses."
+            f"Enrôlement démarré — {n_per_pose}/pose × {n_req} obligatoires + {n_opt} optionnelles."
         )
 
     def cancel_enroll(self) -> None:
@@ -400,26 +411,25 @@ class CameraWorker:
             meta = dict(self._enroll_meta)
             bins = self._enroll_bins
             target = self._enroll_target_per_pose
-            missing = [POSE_LABELS[p] for p in POSE_ORDER
+            missing = [POSE_LABELS.get(p, p) for p in self.required_poses
                        if len(bins.get(p, [])) < target]
 
             if missing:
-                # NE PAS sauvegarder — on relâche l'état et on retourne l'erreur
                 self._enroll_active = False
                 self._enroll_bins = {}
                 self._enroll_target_per_pose = 0
                 self._enroll_meta = {}
-                self._enroll_last_msg = "refusé — poses incomplètes"
+                self._enroll_last_msg = "refusé — poses obligatoires incomplètes"
                 self._pose_thumbs = {}
                 return False, (
-                    "Utilisateur NON enregistré. Poses incomplètes : "
+                    "Utilisateur NON enregistré. Poses obligatoires manquantes : "
                     + ", ".join(missing)
                 )
 
-            # Toutes les poses OK → moyenne globale des embeddings
+            # Toutes les poses obligatoires OK + optionnelles si capturées
             all_feats = []
-            for p in POSE_ORDER:
-                all_feats.extend(bins[p])
+            for p in self.active_poses:
+                all_feats.extend(bins.get(p, []))
             mean_feat = np.mean(np.stack(all_feats), axis=0).astype(np.float32)
 
             name = meta.get("name", "")
@@ -445,8 +455,12 @@ class CameraWorker:
             self._enroll_meta = {}
             self._enroll_last_msg = ""
             self._pose_thumbs = {}
+            n_opt = sum(1 for p in self.optional_poses if len(bins.get(p, [])) > 0)
             verb = "mis à jour" if existed else "ajouté"
-            return True, f"'{name}' {verb} ({len(all_feats)} échantillons, 5 poses)."
+            return True, (
+                f"'{name}' {verb} ({len(all_feats)} échantillons, "
+                f"{len(self.required_poses)} obligatoires + {n_opt} bonus)."
+            )
 
     def reload_db(self) -> None:
         db = load_known(self.cfg["paths"]["embeddings"])

@@ -27,7 +27,7 @@ detection:
 recognition:
   backend: "sface"           # "sface" (default, cross-platform) | "dlib" (needs face_recognition)
   model: "models/face_recognition_sface_2021dec.onnx"
-  match_threshold: 0.80      # cosine similarity in [0,1]
+  match_threshold: 0.70      # cosine similarity in [0,1]
 
 access:
   unlock_seconds: 3
@@ -49,6 +49,13 @@ brightness:
 paths:
   embeddings: "embeddings/known_faces.pkl"
   log_file: "logs/access.log"
+
+enrollment:
+  samples_per_pose: 5
+  # poses obligatoires — l'enrôlement échoue si l'une manque
+  required_poses: ["center", "left", "right"]
+  # poses bonus — collectées si l'utilisateur les fait, mais pas bloquantes
+  optional_poses: ["up", "down"]
 
 display:
   show_preview: true         # False en prod embarquée (headless)
