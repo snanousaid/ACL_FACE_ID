@@ -152,6 +152,9 @@ class CameraWorker:
         self._last_event_ts: float = 0.0
         self._last_event_key: str = ""
 
+        # --- pause reconnaissance (pendant la config admin, hors enrôlement) ---
+        self._paused = False
+
         # --- état enrôlement multi-poses ---
         self._enroll_active = False
         self._enroll_meta: dict = {}
@@ -179,10 +182,10 @@ class CameraWorker:
 
     # ---------- helpers ROI ----------
     def _face_in_roi(self, face_row: np.ndarray, frame_w: int, frame_h: int) -> bool:
-        """Retourne True si le rectangle ENTIER du visage est dans la ROI.
+        """Retourne True si au moins 70% de la surface du visage est dans la ROI.
 
-        On exige que les 4 coins de la bbox soient contenus dans le cadre —
-        pas juste le centre — pour forcer l'utilisateur à bien se positionner.
+        Tolère un léger dépassement (menton, front, joues) : on calcule le
+        ratio d'intersection aire(face ∩ ROI) / aire(face) et on compare à 0.70.
         """
         if not self.roi_enabled:
             return True
@@ -193,12 +196,12 @@ class CameraWorker:
         bottom = float(y + h) / frame_h
         roi_right = self.roi_x + self.roi_w
         roi_bottom = self.roi_y + self.roi_h
-        return bool(
-            left >= self.roi_x
-            and top >= self.roi_y
-            and right <= roi_right
-            and bottom <= roi_bottom
-        )
+
+        inter_w = max(0.0, min(right, roi_right) - max(left, self.roi_x))
+        inter_h = max(0.0, min(bottom, roi_bottom) - max(top, self.roi_y))
+        inter_area = inter_w * inter_h
+        face_area = max(1e-9, (right - left) * (bottom - top))
+        return (inter_area / face_area) >= 0.70
 
     # ---------- helpers enrôlement ----------
     def _enroll_next_pose(self) -> Optional[str]:
@@ -272,10 +275,31 @@ class CameraWorker:
                 continue
 
             self._frame_idx += 1
-            do_detect = (self._frame_idx % self.detect_every == 0)
+            # Pause : on streame la caméra brute, sans détection ni reco.
+            # L'enrôlement force toujours la détection (même en pause).
+            recognition_on = (not self._paused) or self._enroll_active
+            do_detect = recognition_on and (self._frame_idx % self.detect_every == 0)
 
             bright = mean_brightness(frame)
             lum_ok, lum_msg = brightness_ok(bright, self.cfg)
+
+            if not recognition_on:
+                # Flux brut uniquement — pas d'overlays, pas d'events
+                state = {
+                    "brightness": float(bright), "face": False,
+                    "name": None, "role": None, "score": 0.0,
+                    "access": "paused", "msg": "pause",
+                    "ts": time.time(),
+                }
+                with self._lock:
+                    self._status = state
+                self._last_box = None
+                self._last_label = ""
+                ok_jpg, buf = cv2.imencode(".jpg", frame, jpeg_params)
+                with self._lock:
+                    if ok_jpg:
+                        self._jpeg = buf.tobytes()
+                continue
 
             if do_detect:
                 state = {
@@ -381,18 +405,16 @@ class CameraWorker:
                 label = self._last_label
                 box = self._last_box
 
-            # NB: le cadre ROI est dessiné côté frontend (RoiOverlay) pour éviter
-            # un double-rendu. Ici on ne dessine que la bbox du visage détecté.
-            if box is not None:
-                x, y, w, h = box
-                cv2.rectangle(frame, (x, y), (x + w, y + h), color, 2)
-            cv2.putText(frame, label, (10, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
-            cv2.putText(frame, f"lum:{bright:.0f}", (10, frame.shape[0] - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
-
-            # overlay enrôlement
+            # Overlays UNIQUEMENT pendant l'enrôlement.
+            # Sur le home, le flux est propre (pas de bbox, pas de texte) — les infos
+            # sont affichées côté frontend (RoiOverlay + AccessCard).
             with self._lock:
                 if self._enroll_active:
+                    if box is not None:
+                        x, y, w, h = box
+                        cv2.rectangle(frame, (x, y), (x + w, y + h), color, 2)
+                    cv2.putText(frame, label, (10, 28), cv2.FONT_HERSHEY_SIMPLEX,
+                                0.7, color, 2)
                     next_p = self._enroll_next_pose()
                     hint = f"ENROLL -> {POSE_LABELS.get(next_p, '—')}" if next_p else "ENROLL OK"
                     cv2.putText(frame, hint, (10, 58), cv2.FONT_HERSHEY_SIMPLEX,
@@ -447,6 +469,14 @@ class CameraWorker:
         face_events.emit(payload)
 
     # ---------- API thread-safe ----------
+    def pause_recognition(self) -> None:
+        with self._lock:
+            self._paused = True
+
+    def resume_recognition(self) -> None:
+        with self._lock:
+            self._paused = False
+
     def get_jpeg(self) -> Optional[bytes]:
         with self._lock:
             return self._jpeg

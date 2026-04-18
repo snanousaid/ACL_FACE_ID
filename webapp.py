@@ -128,6 +128,19 @@ def video_feed():
     return resp
 
 
+# --------------- pause/resume reconnaissance ---------------
+@app.route("/recognition/pause", methods=["POST"])
+def recognition_pause():
+    WORKER.pause_recognition()
+    return jsonify({"ok": True, "paused": True})
+
+
+@app.route("/recognition/resume", methods=["POST"])
+def recognition_resume():
+    WORKER.resume_recognition()
+    return jsonify({"ok": True, "paused": False})
+
+
 # --------------- statut temps réel ---------------
 @app.route("/status.json")
 def status_json():
