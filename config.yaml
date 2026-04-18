@@ -38,10 +38,11 @@ access:
 # Valeurs par défaut : rectangle centré occupant 50% largeur × 70% hauteur.
 roi:
   enabled: true
-  x: 0.32                    # bord gauche
-  y: 0.20                    # bord haut
-  w: 0.36                    # largeur (36 % de l'image)
-  h: 0.55                    # hauteur (55 % de l'image)
+  # Calibré pour affichage portrait du terminal (60% × 44%, centré)
+  x: 0.20                    # bord gauche
+  y: 0.28                    # bord haut
+  w: 0.60                    # largeur
+  h: 0.44                    # hauteur
 
 gpio:
   # Désactivé pour l'instant — passer à true quand la gâche sera câblée (A133).

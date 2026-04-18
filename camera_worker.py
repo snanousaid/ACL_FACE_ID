@@ -179,16 +179,25 @@ class CameraWorker:
 
     # ---------- helpers ROI ----------
     def _face_in_roi(self, face_row: np.ndarray, frame_w: int, frame_h: int) -> bool:
-        """Retourne True si le centre du visage est dans le rectangle ROI."""
+        """Retourne True si le rectangle ENTIER du visage est dans la ROI.
+
+        On exige que les 4 coins de la bbox soient contenus dans le cadre —
+        pas juste le centre — pour forcer l'utilisateur à bien se positionner.
+        """
         if not self.roi_enabled:
             return True
         x, y, w, h = face_row[:4]
-        cx = float(x + w / 2.0) / frame_w
-        cy = float(y + h / 2.0) / frame_h
-        # cast explicite en bool Python pour la sérialisation JSON (numpy.bool_ non supporté)
+        left = float(x) / frame_w
+        top = float(y) / frame_h
+        right = float(x + w) / frame_w
+        bottom = float(y + h) / frame_h
+        roi_right = self.roi_x + self.roi_w
+        roi_bottom = self.roi_y + self.roi_h
         return bool(
-            self.roi_x <= cx <= (self.roi_x + self.roi_w)
-            and self.roi_y <= cy <= (self.roi_y + self.roi_h)
+            left >= self.roi_x
+            and top >= self.roi_y
+            and right <= roi_right
+            and bottom <= roi_bottom
         )
 
     # ---------- helpers enrôlement ----------
@@ -302,10 +311,10 @@ class CameraWorker:
                         box = (x, y, w, h)
 
                         if not in_roi:
-                            # visage détecté mais hors du cadre → pas de reco, pas d'event
+                            # visage détecté mais le rectangle dépasse le cadre → pas de reco
                             state["access"] = "out_of_zone"
-                            state["msg"] = "approchez-vous du cadre"
-                            label = "APPROCHEZ DU CADRE"
+                            state["msg"] = "placez votre visage complètement dans le cadre"
+                            label = "CENTRER DANS LE CADRE"
                             color = (160, 160, 160)
                         else:
                             feat = self.fp.embed(frame, face)
@@ -313,10 +322,14 @@ class CameraWorker:
                             with self._lock:
                                 self._try_sample(frame, face, feat)
 
-                            name, score, entry = match(feat, self.db)
+                            # Scan sur TOUS les users (actifs + désactivés) pour pouvoir
+                            # distinguer "inconnu" (silencieux) de "désactivé" (denied).
+                            name, score, entry = match(feat, self.db, include_inactive=True)
                             state["score"] = float(score)
+                            active = bool(entry.get("active", True)) if entry else True
 
-                            if name is not None and score >= self.threshold:
+                            if name is not None and score >= self.threshold and active:
+                                # Utilisateur enregistré et ACTIF → granted
                                 role = entry.get("role", "user") if entry else "user"
                                 state["name"] = name
                                 state["role"] = role
@@ -328,12 +341,22 @@ class CameraWorker:
                                     self.actuator.pulse(self.unlock_s)
                                 label = f"{name} [{role}] {score:.2f}"
                                 color = (0, 220, 0)
-                            else:
+                            elif name is not None and score >= self.threshold and not active:
+                                # Utilisateur enregistré mais DÉSACTIVÉ → denied (évènement émis)
+                                role = entry.get("role", "user") if entry else "user"
+                                state["name"] = name
+                                state["role"] = role
                                 state["access"] = "denied"
-                                state["name"] = name or "unknown"
-                                self.logger.info(f"DENIED,{name or 'unknown'},score={score:.3f}")
-                                label = f"DENIED {score:.2f}"
+                                state["reason"] = "disabled"
+                                self.logger.info(f"DENIED_DISABLED,{name},score={score:.3f}")
+                                label = f"{name} DÉSACTIVÉ"
                                 color = (0, 0, 220)
+                            else:
+                                # Inconnu (score trop bas) → silencieux, PAS d'événement
+                                state["access"] = "unknown"
+                                state["name"] = None
+                                label = f"Inconnu {score:.2f}"
+                                color = (150, 150, 150)
                     else:
                         state["msg"] = "no_face"
                         label = "no face"
@@ -358,16 +381,8 @@ class CameraWorker:
                 label = self._last_label
                 box = self._last_box
 
-            # Cadre ROI — dessiné avant la bbox du visage pour rester en fond
-            if self.roi_enabled:
-                fh, fw = frame.shape[:2]
-                rx1 = int(self.roi_x * fw)
-                ry1 = int(self.roi_y * fh)
-                rx2 = int((self.roi_x + self.roi_w) * fw)
-                ry2 = int((self.roi_y + self.roi_h) * fh)
-                roi_color = color if state.get("face") and state.get("in_roi") else (180, 180, 180)
-                cv2.rectangle(frame, (rx1, ry1), (rx2, ry2), roi_color, 2)
-
+            # NB: le cadre ROI est dessiné côté frontend (RoiOverlay) pour éviter
+            # un double-rendu. Ici on ne dessine que la bbox du visage détecté.
             if box is not None:
                 x, y, w, h = box
                 cv2.rectangle(frame, (x, y), (x + w, y + h), color, 2)
@@ -426,6 +441,9 @@ class CameraWorker:
             "readerName": "Caméra locale",
             "createdAt": datetime.now().isoformat(),
         }
+        reason = state.get("reason")
+        if reason:
+            payload["reason"] = reason
         face_events.emit(payload)
 
     # ---------- API thread-safe ----------

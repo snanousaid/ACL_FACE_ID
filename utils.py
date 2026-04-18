@@ -181,12 +181,23 @@ def save_known(path: str, db: dict[str, dict]) -> None:
         pickle.dump(db, f, protocol=pickle.HIGHEST_PROTOCOL)
 
 
-def match(embedding: np.ndarray, db: dict[str, dict]) -> tuple[Optional[str], float, Optional[dict]]:
+def match(
+    embedding: np.ndarray,
+    db: dict[str, dict],
+    include_inactive: bool = False,
+) -> tuple[Optional[str], float, Optional[dict]]:
+    """Cherche le meilleur match dans la DB.
+
+    include_inactive=False (défaut) : compatible avec l'ancien comportement,
+        les utilisateurs désactivés sont ignorés et ne peuvent pas être retournés.
+    include_inactive=True : scanne TOUS les utilisateurs (même désactivés). Utile
+        pour distinguer "inconnu" (score bas) de "désactivé" (score haut + entry.active=False).
+    """
     if not db:
         return None, 0.0, None
     best_name, best_score, best_entry = None, -1.0, None
     for name, entry in db.items():
-        if not entry.get("active", True):
+        if not include_inactive and not entry.get("active", True):
             continue
         ref = entry["embedding"]
         s = cosine_similarity(embedding, ref)
