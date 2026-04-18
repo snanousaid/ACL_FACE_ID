@@ -116,8 +116,16 @@ def _mjpeg_generator():
 
 @app.route("/video_feed")
 def video_feed():
-    return Response(_mjpeg_generator(),
+    resp = Response(_mjpeg_generator(),
                     mimetype="multipart/x-mixed-replace; boundary=frame")
+    # Empêche toute réutilisation/mise en cache de la connexion côté client
+    # (Electron/Chromium peut rester bloqué sur une connexion MJPEG zombie au 1er chargement)
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, private"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
+    resp.headers["Connection"] = "close"
+    resp.headers["X-Accel-Buffering"] = "no"
+    return resp
 
 
 # --------------- statut temps réel ---------------
