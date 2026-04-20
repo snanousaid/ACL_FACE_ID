@@ -1,23 +1,25 @@
-"""Interface web d'administration multi-utilisateurs avec stream vidéo live.
+"""Interface web d'administration multi-utilisateurs avec stream vidéo WebRTC.
 
 Lancer: python webapp.py
-  → HTTP (dashboard/stream/API) : http://localhost:5050
-  → Socket.IO (événements face) : ws://localhost:5001
+  → HTTP (dashboard/API)         : http://localhost:5050
+  → WebRTC (signalisation)       : POST http://localhost:5050/webrtc/offer
+  → Socket.IO (événements face)  : ws://localhost:5001
 
-ATTENTION: la webapp possède maintenant la caméra via CameraWorker.
+ATTENTION: la webapp possède la caméra via CameraWorker.
 Ne pas lancer main.py en parallèle (conflit caméra).
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import threading
-import time
 from datetime import datetime
 from pathlib import Path
 
 import cv2
 import numpy as np
 import socketio
+from aiortc import RTCPeerConnection, RTCSessionDescription
 from flask import (
     Flask, Response, flash, jsonify, redirect, render_template, request, url_for,
 )
@@ -33,6 +35,7 @@ from utils import (
     load_known,
     save_known,
 )
+from webrtc_track import FaceTrack
 
 CFG = load_config("config.yaml")
 ensure_dirs(CFG)
@@ -62,6 +65,41 @@ face_events.set_emitter(_emit_face_event)
 
 # --------------- Worker caméra -------------------------------
 WORKER = CameraWorker(CFG)
+
+# --------------- Event loop asyncio pour aiortc (thread séparé) -----
+# aiortc impose un event loop asyncio ; Flask est synchrone. On fait tourner
+# une loop dédiée en thread daemon, les routes Flask lui soumettent du travail
+# via run_coroutine_threadsafe. Même pattern que le serveur Socket.IO.
+_rtc_loop = asyncio.new_event_loop()
+_rtc_pcs: set[RTCPeerConnection] = set()
+_rtc_log = logging.getLogger("face-webrtc")
+
+
+def _start_rtc_loop() -> threading.Thread:
+    t = threading.Thread(
+        target=_rtc_loop.run_forever, daemon=True, name="face-webrtc-loop"
+    )
+    t.start()
+    return t
+
+
+async def _handle_offer(offer_sdp: str, offer_type: str) -> dict:
+    pc = RTCPeerConnection()
+    _rtc_pcs.add(pc)
+
+    @pc.on("connectionstatechange")
+    async def _on_state() -> None:
+        _rtc_log.info("peer state=%s", pc.connectionState)
+        if pc.connectionState in ("failed", "closed", "disconnected"):
+            await pc.close()
+            _rtc_pcs.discard(pc)
+
+    pc.addTrack(FaceTrack(WORKER, fps=int(CFG.get("perf", {}).get("stream_fps", 15))))
+    await pc.setRemoteDescription(RTCSessionDescription(sdp=offer_sdp, type=offer_type))
+    answer = await pc.createAnswer()
+    await pc.setLocalDescription(answer)
+    return {"sdp": pc.localDescription.sdp, "type": pc.localDescription.type}
+
 
 # --------------- Flask (port 5050) ---------------------------
 app = Flask(__name__)
@@ -98,34 +136,26 @@ def index():
     )
 
 
-# --------------- stream vidéo MJPEG ---------------
-_STREAM_INTERVAL = 1.0 / max(1, int(CFG.get("perf", {}).get("stream_fps", 10)))
+# --------------- signalisation WebRTC ---------------
+@app.route("/webrtc/offer", methods=["POST"])
+def webrtc_offer():
+    """Signalisation WHEP-like : reçoit un SDP offer, renvoie le SDP answer.
 
-
-def _mjpeg_generator():
-    boundary = b"--frame"
-    while True:
-        jpg = WORKER.get_jpeg()
-        if jpg is None:
-            time.sleep(0.05)
-            continue
-        yield (boundary + b"\r\nContent-Type: image/jpeg\r\nContent-Length: "
-               + str(len(jpg)).encode() + b"\r\n\r\n" + jpg + b"\r\n")
-        time.sleep(_STREAM_INTERVAL)
-
-
-@app.route("/video_feed")
-def video_feed():
-    resp = Response(_mjpeg_generator(),
-                    mimetype="multipart/x-mixed-replace; boundary=frame")
-    # Empêche toute réutilisation/mise en cache de la connexion côté client
-    # (Electron/Chromium peut rester bloqué sur une connexion MJPEG zombie au 1er chargement)
-    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, private"
-    resp.headers["Pragma"] = "no-cache"
-    resp.headers["Expires"] = "0"
-    resp.headers["Connection"] = "close"
-    resp.headers["X-Accel-Buffering"] = "no"
-    return resp
+    Format JSON : {"sdp": "...", "type": "offer"} → {"sdp": "...", "type": "answer"}
+    Le traitement aiortc (async) tourne sur l'event loop _rtc_loop en thread bg.
+    """
+    params = request.get_json(silent=True) or {}
+    sdp = params.get("sdp")
+    typ = params.get("type", "offer")
+    if not sdp:
+        return jsonify({"ok": False, "msg": "sdp manquant"}), 400
+    future = asyncio.run_coroutine_threadsafe(_handle_offer(sdp, typ), _rtc_loop)
+    try:
+        answer = future.result(timeout=10)
+    except Exception as exc:
+        _rtc_log.exception("offer failed")
+        return jsonify({"ok": False, "msg": str(exc)}), 500
+    return jsonify(answer)
 
 
 # --------------- pause/resume reconnaissance ---------------
@@ -315,7 +345,19 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s [%(name)s] %(message)s")
     _start_socketio_server()
+    _start_rtc_loop()
+    logging.info("WebRTC loop démarrée (POST /webrtc/offer)")
     try:
         app.run(host="0.0.0.0", port=5050, debug=False, threaded=True)
     finally:
+        # Fermeture des PC actives avant d'arrêter la loop aiortc
+        fut = asyncio.run_coroutine_threadsafe(
+            asyncio.gather(*(pc.close() for pc in _rtc_pcs), return_exceptions=True),
+            _rtc_loop,
+        )
+        try:
+            fut.result(timeout=2.0)
+        except Exception:
+            pass
+        _rtc_loop.call_soon_threadsafe(_rtc_loop.stop)
         WORKER.stop()

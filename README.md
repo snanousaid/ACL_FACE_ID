@@ -22,17 +22,17 @@ Système embarqué de contrôle d'accès par reconnaissance faciale, conçu pour
                                    │  ┌── GRANTED ──► GPIO pulse (gâche)
                                    │  └── DENIED  ──► log
                                    │              │
-                                   │  JPEG encode ──► MJPEG stream
+                                   │  frame BGR ──► FaceTrack (aiortc VP8)
                                    └──────┬───────┘
                                           │
-                         ┌────────────────┼────────────────┐
-                         │          Flask webapp            │
-                         │  /             → dashboard       │
-                         │  /video_feed   → MJPEG stream    │
-                         │  /status.json  → statut temps réel│
-                         │  /enroll_*     → enrôlement      │
-                         │  /pose_thumb/* → vignettes poses │
-                         └────────────────┼────────────────┘
+                         ┌────────────────┼─────────────────┐
+                         │          Flask webapp             │
+                         │  /               → dashboard      │
+                         │  /webrtc/offer   → signalisation  │
+                         │  /status.json    → statut temps réel
+                         │  /enroll_*       → enrôlement     │
+                         │  /pose_thumb/*   → vignettes poses│
+                         └────────────────┼─────────────────┘
                                           │
                                     http://:5050
                                      navigateur
@@ -133,7 +133,7 @@ perf:
   detect_every_n: 2        # skip-frame
   detect_scale: 1.0        # 0.5 = détection sur demi-résolution (requiert OpenCV >=4.8)
   stream_fps: 10
-  jpeg_quality: 75
+  # (JPEG encoding retiré : stream passé en WebRTC/VP8)
 
 enrollment:
   required_poses: ["center", "left", "right"]

@@ -15,8 +15,7 @@ perf:
   opencv_threads: 2          # cv2.setNumThreads — 0 = tous les cores. 2 = sweet spot A733
   detect_every_n: 2          # détection 1 frame sur N (1 = chaque frame, 2 = 50%, 3 = 33%)
   detect_scale: 1.0          # 1.0 = pas de downscale (requis OpenCV <4.8). Passer à 0.5 après upgrade OpenCV.
-  stream_fps: 10             # FPS du stream MJPEG envoyé au navigateur
-  jpeg_quality: 75           # qualité visuelle stream (60-80)
+  stream_fps: 15             # FPS du stream vidéo WebRTC (VP8)
 
 detection:
   model: "models/face_detection_yunet_2023mar.onnx"

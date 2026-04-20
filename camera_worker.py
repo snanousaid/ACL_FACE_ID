@@ -103,7 +103,6 @@ class CameraWorker:
         perf = cfg.get("perf", {})
         self.detect_every = max(1, int(perf.get("detect_every_n", 1)))
         self.detect_scale = float(perf.get("detect_scale", 1.0))
-        self.jpeg_quality = int(perf.get("jpeg_quality", 70))
         n_threads = int(perf.get("opencv_threads", 0))
         if n_threads > 0:
             cv2.setNumThreads(n_threads)
@@ -140,7 +139,9 @@ class CameraWorker:
 
         self._lock = threading.Lock()
         self._stop = threading.Event()
-        self._jpeg: Optional[bytes] = None
+        # Dernière frame BGR annotée (numpy uint8) consommée par le track WebRTC.
+        # aiortc l'encode en VP8 à la volée ; plus d'encodage JPEG côté worker.
+        self._frame_bgr: Optional[np.ndarray] = None
         self._status: dict = {
             "name": None, "role": None, "score": 0.0,
             "access": "waiting", "brightness": 0.0, "face": False,
@@ -265,7 +266,6 @@ class CameraWorker:
     # ---------- boucle principale ----------
     def _loop(self) -> None:
         while not self._stop.is_set():
-            jpeg_params = [int(cv2.IMWRITE_JPEG_QUALITY), self.jpeg_quality]
             if not self.cap.isOpened():
                 time.sleep(1.0)
                 continue
@@ -293,12 +293,9 @@ class CameraWorker:
                 }
                 with self._lock:
                     self._status = state
+                    self._frame_bgr = frame
                 self._last_box = None
                 self._last_label = ""
-                ok_jpg, buf = cv2.imencode(".jpg", frame, jpeg_params)
-                with self._lock:
-                    if ok_jpg:
-                        self._jpeg = buf.tobytes()
                 continue
 
             if do_detect:
@@ -429,10 +426,8 @@ class CameraWorker:
                         cv2.putText(frame, txt, (10 + i * 100, 88),
                                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, col, 2)
 
-            ok_jpg, buf = cv2.imencode(".jpg", frame, jpeg_params)
             with self._lock:
-                if ok_jpg:
-                    self._jpeg = buf.tobytes()
+                self._frame_bgr = frame
 
         try:
             self.cap.release()
@@ -477,9 +472,16 @@ class CameraWorker:
         with self._lock:
             self._paused = False
 
-    def get_jpeg(self) -> Optional[bytes]:
+    def get_frame_bgr(self) -> Optional[np.ndarray]:
+        """Retourne une copie de la dernière frame BGR annotée (pour aiortc).
+
+        Copie nécessaire : aiortc encode la frame hors du lock, la référence
+        partagée serait écrasée par la boucle de capture pendant l'encode.
+        """
         with self._lock:
-            return self._jpeg
+            if self._frame_bgr is None:
+                return None
+            return self._frame_bgr.copy()
 
     def get_status(self) -> dict:
         with self._lock:

@@ -6,6 +6,12 @@ Flask>=3.0
 flask-cors>=4.0
 python-socketio>=5.11,<6
 
+# WebRTC : stream vidéo temps réel vers ACL_Terminal (VP8 par défaut).
+# `av` (PyAV) fournit l'encodage vidéo. Sur Windows les wheels sont pré-compilées ;
+# sur Linux ARM, `av` peut nécessiter ffmpeg-dev + build tools.
+aiortc>=1.7
+av>=11.0
+
 # GPIO — installé uniquement sur Linux (A133). Ignoré sur Windows grâce au marker.
 # v2.x nécessite libgpiod 2.x sur le système. Si indisponible, installe plutôt
 #   `gpiod<2` pour utiliser la v1 (Ubuntu 20.04 par défaut, libgpiod 1.6).
