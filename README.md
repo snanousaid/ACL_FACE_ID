@@ -34,7 +34,7 @@ Système embarqué de contrôle d'accès par reconnaissance faciale, conçu pour
                          │  /pose_thumb/* → vignettes poses │
                          └────────────────┼────────────────┘
                                           │
-                                    http://:5000
+                                    http://:5050
                                      navigateur
 ```
 
@@ -68,7 +68,7 @@ curl -LO https://github.com/opencv/opencv_zoo/raw/main/models/face_recognition_s
 cd ..
 
 python webapp.py
-# → http://localhost:5000
+# → http://localhost:5050
 ```
 
 ### Linux A733 (production)
@@ -91,12 +91,12 @@ ls -l /dev/video*
 # Si permission denied : sudo usermod -aG video $USER && logout
 
 python3 webapp.py
-# → http://<IP_board>:5000
+# → http://<IP_board>:5050
 ```
 
 ## Utilisation
 
-### Interface web (http://\<IP\>:5000)
+### Interface web (http://\<IP\>:5050)
 
 - **Stream live** : flux MJPEG temps réel avec bbox et labels
 - **Bandeau accès** : ACCÈS AUTORISÉ (vert) / REFUSÉ (rouge) / EN ATTENTE (gris)

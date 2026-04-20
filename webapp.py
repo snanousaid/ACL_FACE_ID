@@ -1,7 +1,7 @@
 """Interface web d'administration multi-utilisateurs avec stream vidéo live.
 
 Lancer: python webapp.py
-  → HTTP (dashboard/stream/API) : http://localhost:5000
+  → HTTP (dashboard/stream/API) : http://localhost:5050
   → Socket.IO (événements face) : ws://localhost:5001
 
 ATTENTION: la webapp possède maintenant la caméra via CameraWorker.
@@ -63,7 +63,7 @@ face_events.set_emitter(_emit_face_event)
 # --------------- Worker caméra -------------------------------
 WORKER = CameraWorker(CFG)
 
-# --------------- Flask (port 5000) ---------------------------
+# --------------- Flask (port 5050) ---------------------------
 app = Flask(__name__)
 # Autorise tous les domaines (ACL_Terminal dev = localhost:5173, prod = Electron file://).
 CORS(app)
@@ -316,6 +316,6 @@ if __name__ == "__main__":
                         format="%(asctime)s [%(name)s] %(message)s")
     _start_socketio_server()
     try:
-        app.run(host="0.0.0.0", port=5000, debug=False, threaded=True)
+        app.run(host="0.0.0.0", port=5050, debug=False, threaded=True)
     finally:
         WORKER.stop()
