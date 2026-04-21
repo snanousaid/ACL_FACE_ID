@@ -351,10 +351,9 @@ if __name__ == "__main__":
         app.run(host="0.0.0.0", port=5050, debug=False, threaded=True)
     finally:
         # Fermeture des PC actives avant d'arrêter la loop aiortc
-        fut = asyncio.run_coroutine_threadsafe(
-            asyncio.gather(*(pc.close() for pc in _rtc_pcs), return_exceptions=True),
-            _rtc_loop,
-        )
+        async def _close_all() -> None:
+            await asyncio.gather(*(pc.close() for pc in list(_rtc_pcs)), return_exceptions=True)
+        fut = asyncio.run_coroutine_threadsafe(_close_all(), _rtc_loop)
         try:
             fut.result(timeout=2.0)
         except Exception:
