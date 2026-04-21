@@ -33,21 +33,25 @@ class ShmWriter:
     """
 
     def __init__(self, width: int, height: int, channels: int = 3) -> None:
-        self.width    = width
-        self.height   = height
-        self.channels = channels
+        self.width     = width
+        self.height    = height
+        self.channels  = channels
         self._frame_id = 0
 
         frame_bytes = width * height * channels
         total_size  = HEADER_SIZE + frame_bytes
 
+        # Nettoyage d'un éventuel bloc résiduel (crash précédent)
         try:
-            # Tente de récupérer un bloc existant (redémarrage)
-            self._shm = SharedMemory(name=SHM_NAME, create=False, size=total_size)
-            logger.info("ShmWriter: bloc existant récupéré (%d bytes)", total_size)
+            stale = SharedMemory(name=SHM_NAME, create=False)
+            stale.unlink()
+            stale.close()
+            logger.info("ShmWriter: bloc résiduel nettoyé")
         except FileNotFoundError:
-            self._shm = SharedMemory(name=SHM_NAME, create=True, size=total_size)
-            logger.info("ShmWriter: nouveau bloc créé (%d bytes)", total_size)
+            pass
+
+        self._shm = SharedMemory(name=SHM_NAME, create=True, size=total_size)
+        logger.info("ShmWriter: bloc créé (%d bytes)", total_size)
 
         # Vue numpy directe sur les pixels (zero-copy)
         self._pixels = np.ndarray(

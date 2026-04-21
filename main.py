@@ -7,10 +7,14 @@ from __future__ import annotations
 
 import csv
 import logging
+import os
 import sys
 import time
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+
+# Force xcb (X11) pour OpenCV — évite le conflit avec eglfs sur Pi
+os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
 
 import cv2
 
