@@ -7,14 +7,10 @@ from __future__ import annotations
 
 import csv
 import logging
-import os
 import sys
 import time
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-
-# Force xcb (X11) pour OpenCV — évite le conflit avec eglfs sur Pi
-os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
 
 import cv2
 
@@ -80,7 +76,6 @@ def run(cfg: dict) -> int:
     threshold = float(cfg["recognition"]["match_threshold"])
     cooldown = float(cfg["access"]["cooldown_seconds"])
     unlock_s = int(cfg["access"]["unlock_seconds"])
-    show = bool(cfg["display"]["show_preview"])
     warn_every = int(cfg["brightness"]["warn_every_n_frames"])
 
     # Shared memory — stream vers Qt (désactivable via config)
@@ -91,6 +86,10 @@ def run(cfg: dict) -> int:
         if ret:
             shm = ShmWriter(probe.shape[1], probe.shape[0])
             logger.info(f"shm_stream,enabled,{probe.shape[1]}x{probe.shape[0]}")
+
+    # Si shm actif Qt gère l'affichage — désactive cv2.imshow pour éviter
+    # le conflit Qt platform (eglfs vs xcb) d'opencv-python
+    show = bool(cfg["display"]["show_preview"]) and not shm_enabled
 
     last_grant: dict[str, float] = {}
     lum_warn_counter = 0
