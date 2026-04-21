@@ -14,6 +14,7 @@ from pathlib import Path
 
 import cv2
 
+from shm_writer import ShmWriter
 from utils import (
     FaceProcessor,
     brightness_ok,
@@ -78,6 +79,15 @@ def run(cfg: dict) -> int:
     show = bool(cfg["display"]["show_preview"])
     warn_every = int(cfg["brightness"]["warn_every_n_frames"])
 
+    # Shared memory — stream vers Qt (désactivable via config)
+    shm_enabled = cfg.get("display", {}).get("shm_stream", True)
+    shm: ShmWriter | None = None
+    if shm_enabled:
+        ret, probe = cap.read()
+        if ret:
+            shm = ShmWriter(probe.shape[1], probe.shape[0])
+            logger.info(f"shm_stream,enabled,{probe.shape[1]}x{probe.shape[0]}")
+
     last_grant: dict[str, float] = {}
     lum_warn_counter = 0
     last_bad_lum = ""
@@ -130,11 +140,17 @@ def run(cfg: dict) -> int:
                         status_text = f"DENIED ({score:.2f})"
                         color = (0, 0, 255)
 
+            # Overlay texte sur la frame
+            cv2.putText(frame, status_text, (10, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+            cv2.putText(frame, f"lum:{bright:.0f}", (10, frame.shape[0] - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
+
+            # Envoie vers Qt via shared memory
+            if shm is not None:
+                shm.write(frame)
+
             if show:
-                cv2.putText(frame, status_text, (10, 30),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
-                cv2.putText(frame, f"lum:{bright:.0f}", (10, frame.shape[0] - 10),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
                 cv2.imshow("Access Control (q to quit)", frame)
                 if cv2.waitKey(1) & 0xFF == ord("q"):
                     break
@@ -146,6 +162,8 @@ def run(cfg: dict) -> int:
     finally:
         cap.release()
         cv2.destroyAllWindows()
+        if shm is not None:
+            shm.close()
     return 0
 
 
